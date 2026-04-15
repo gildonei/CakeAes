@@ -309,7 +309,7 @@ class EncryptBehavior extends Behavior
     {
         /** @var string $key */
         $key = Configure::read('Security.key');
-        $expression = "(CONVERT(AES_DECRYPT({$fieldName}, UNHEX('{$key}')) USING utf8) COLLATE utf8_general_ci)";
+        $expression = "AES_DECRYPT({$fieldName}, UNHEX('{$key}'))";
 
         return $expression;
     }
