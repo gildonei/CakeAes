@@ -70,7 +70,7 @@ class EncryptBehavior extends Behavior
         $key = Configure::read('Security.key');
         $query = $this->_table->find();
         $value = addslashes($value);
-        $expressionValue = $query->newExpr()
+        $expressionValue = $query->expr()
             ->add("AES_ENCRYPT('{$value}',UNHEX('{$key}'))");
 
         return $expressionValue;
@@ -233,7 +233,7 @@ class EncryptBehavior extends Behavior
     public function decryptEq(string $fieldName, string $value): QueryExpression
     {
         $query = $this->_table->find();
-        $expressioEquals = $query->newExpr()
+        $expressioEquals = $query->expr()
             ->eq($this->decryptField($fieldName), $value);
 
         return $expressioEquals;
@@ -242,7 +242,7 @@ class EncryptBehavior extends Behavior
     public function decryptNotEq(string $fieldName, string $value): QueryExpression
     {
         $query = $this->_table->find();
-        $expressioEquals = $query->newExpr()
+        $expressioEquals = $query->expr()
             ->notEq($this->decryptField($fieldName), $value);
 
         return $expressioEquals;
@@ -251,7 +251,7 @@ class EncryptBehavior extends Behavior
     public function decryptLike(string $fieldName, string $value): QueryExpression
     {
         $query = $this->_table->find();
-        $expressioEquals = $query->newExpr()
+        $expressioEquals = $query->expr()
             ->like($this->decryptField($fieldName), $value);
 
         return $expressioEquals;
@@ -260,7 +260,7 @@ class EncryptBehavior extends Behavior
     public function decryptNotLike(string $fieldName, string $value): QueryExpression
     {
         $query = $this->_table->find();
-        $expressioEquals = $query->newExpr()
+        $expressioEquals = $query->expr()
             ->notLike($this->decryptField($fieldName), $value);
 
         return $expressioEquals;
@@ -269,7 +269,7 @@ class EncryptBehavior extends Behavior
     public function decryptIn(string $fieldName, string $value): QueryExpression
     {
         $query = $this->_table->find();
-        $expressioEquals = $query->newExpr()
+        $expressioEquals = $query->expr()
             ->in($this->decryptField($fieldName), $value);
 
         return $expressioEquals;
@@ -278,7 +278,7 @@ class EncryptBehavior extends Behavior
     public function decryptNotIn(string $fieldName, string $value): QueryExpression
     {
         $query = $this->_table->find();
-        $expressioEquals = $query->newExpr()
+        $expressioEquals = $query->expr()
             ->notIn($this->decryptField($fieldName), $value);
 
         return $expressioEquals;
@@ -293,7 +293,7 @@ class EncryptBehavior extends Behavior
     public function decryptField($fieldName): QueryExpression
     {
         $expressionField = $this->_table->find()
-            ->newExpr()
+            ->expr()
             ->add($this->decryptString($fieldName));
 
         return $expressionField;
