@@ -8,6 +8,7 @@ use Cake\Core\Configure;
 use Cake\Database\Expression\FunctionExpression;
 use Cake\Database\Expression\IdentifierExpression;
 use Cake\Database\Expression\QueryExpression;
+use Cake\Database\Expression\ComparisonExpression;
 use Cake\Datasource\EntityInterface;
 use Cake\Event\EventInterface;
 use Cake\ORM\Behavior;
@@ -70,7 +71,7 @@ class EncryptBehavior extends Behavior
         $key = Configure::read('Security.key');
         $query = $this->_table->find();
         $value = addslashes($value);
-        $expressionValue = $query->newExpr()
+        $expressionValue = $query->expr()
             ->add("AES_ENCRYPT('{$value}',UNHEX('{$key}'))");
 
         return $expressionValue;
@@ -159,9 +160,9 @@ class EncryptBehavior extends Behavior
     public function decryptWhere(Query $query): Query
     {
         $expr = $query->clause('where');
-        if ($expr instanceof \Cake\Database\Expression\QueryExpression) {
+        if ($expr instanceof QueryExpression) {
             $expr->traverse(function ($condition) {
-                if ($condition instanceof \Cake\Database\Expression\ComparisonExpression) {
+                if ($condition instanceof ComparisonExpression) {
                     $field = $condition->getField();
                     if (is_string($field) && $this->isEncrypted($field)) {
                         $condition->setField($this->decryptField($field));
@@ -233,7 +234,7 @@ class EncryptBehavior extends Behavior
     public function decryptEq(string $fieldName, string $value): QueryExpression
     {
         $query = $this->_table->find();
-        $expressioEquals = $query->newExpr()
+        $expressioEquals = $query->expr()
             ->eq($this->decryptField($fieldName), $value);
 
         return $expressioEquals;
@@ -242,7 +243,7 @@ class EncryptBehavior extends Behavior
     public function decryptNotEq(string $fieldName, string $value): QueryExpression
     {
         $query = $this->_table->find();
-        $expressioEquals = $query->newExpr()
+        $expressioEquals = $query->expr()
             ->notEq($this->decryptField($fieldName), $value);
 
         return $expressioEquals;
@@ -251,7 +252,7 @@ class EncryptBehavior extends Behavior
     public function decryptLike(string $fieldName, string $value): QueryExpression
     {
         $query = $this->_table->find();
-        $expressioEquals = $query->newExpr()
+        $expressioEquals = $query->expr()
             ->like($this->decryptField($fieldName), $value);
 
         return $expressioEquals;
@@ -260,7 +261,7 @@ class EncryptBehavior extends Behavior
     public function decryptNotLike(string $fieldName, string $value): QueryExpression
     {
         $query = $this->_table->find();
-        $expressioEquals = $query->newExpr()
+        $expressioEquals = $query->expr()
             ->notLike($this->decryptField($fieldName), $value);
 
         return $expressioEquals;
@@ -269,7 +270,7 @@ class EncryptBehavior extends Behavior
     public function decryptIn(string $fieldName, string $value): QueryExpression
     {
         $query = $this->_table->find();
-        $expressioEquals = $query->newExpr()
+        $expressioEquals = $query->expr()
             ->in($this->decryptField($fieldName), $value);
 
         return $expressioEquals;
@@ -278,7 +279,7 @@ class EncryptBehavior extends Behavior
     public function decryptNotIn(string $fieldName, string $value): QueryExpression
     {
         $query = $this->_table->find();
-        $expressioEquals = $query->newExpr()
+        $expressioEquals = $query->expr()
             ->notIn($this->decryptField($fieldName), $value);
 
         return $expressioEquals;
@@ -293,7 +294,7 @@ class EncryptBehavior extends Behavior
     public function decryptField($fieldName): QueryExpression
     {
         $expressionField = $this->_table->find()
-            ->newExpr()
+            ->expr()
             ->add($this->decryptString($fieldName));
 
         return $expressionField;
@@ -309,7 +310,7 @@ class EncryptBehavior extends Behavior
     {
         /** @var string $key */
         $key = Configure::read('Security.key');
-        $expression = "(CONVERT(AES_DECRYPT({$fieldName}, UNHEX('{$key}')) USING utf8) COLLATE utf8_general_ci)";
+        $expression = "(CONVERT(AES_DECRYPT({$fieldName}, UNHEX('{$key}')) USING utf8mb4) COLLATE utf8mb4_unicode_ci)";
 
         return $expression;
     }
