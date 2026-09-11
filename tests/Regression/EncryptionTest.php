@@ -5,6 +5,7 @@ use PHPUnit\Framework\TestCase;
 use Cake\Core\Configure;
 use Cake\Database\Connection;
 use Cake\Database\Driver\Mysql;
+use Cake\Database\Driver\Postgres;
 use Cake\Database\StatementInterface;
 use Cake\Database\Schema\TableSchema;
 use Cake\Database\ValueBinder;
@@ -12,6 +13,7 @@ use Cake\ORM\Table;
 use CakeAes\Model\Behavior\EncryptBehavior;
 use CakeAes\Model\Database\Type\AesType;
 use CakeAes\Model\Database\EncryptionProfile;
+use CakeAes\Model\Database\Dialect\EncryptionDialectFactory;
 
 final class EncryptionTest extends TestCase
 {
@@ -24,6 +26,23 @@ final class EncryptionTest extends TestCase
             $statement->method('fetchColumn')->willReturn(str_contains($sql, 'VERSION') ? $version : $mode);
             return $statement;
         });
+        return $connection;
+    }
+
+    private function postgresConnection(bool $pgcrypto = true): Connection
+    {
+        $connection = $this->getMockBuilder(Connection::class)
+            ->disableOriginalConstructor()
+            ->onlyMethods(['getDriver', 'execute'])
+            ->getMock();
+        $connection->method('getDriver')->willReturn(new Postgres());
+        $connection->method('execute')->willReturnCallback(function () use ($pgcrypto) {
+            $statement = $this->createMock(StatementInterface::class);
+            $statement->method('fetchColumn')->willReturn($pgcrypto);
+
+            return $statement;
+        });
+
         return $connection;
     }
 
@@ -108,5 +127,54 @@ final class EncryptionTest extends TestCase
         Configure::write('Security.key', "invalid'key");
         $this->expectException(InvalidArgumentException::class);
         EncryptionProfile::key($this->connection());
+    }
+
+    public function testPostgresDialectUsesPgcryptoAndBindsValues(): void
+    {
+        Configure::write('CakeAes.key', 'postgres-passphrase-with-32-chars');
+        $table = new Table([
+            'alias' => 'Temps',
+            'table' => 'temps',
+            'connection' => $this->postgresConnection(),
+        ]);
+        $table->setSchema(new TableSchema('temps', ['name' => ['type' => 'binary']]));
+        $behavior = new EncryptBehavior($table, ['fields' => ['name']]);
+
+        $encryptBinder = new ValueBinder();
+        $encryptSql = $behavior->encrypt("O'Reilly")->sql($encryptBinder);
+        self::assertStringContainsString('pgp_sym_encrypt', $encryptSql);
+        self::assertStringNotContainsString("O'Reilly", $encryptSql);
+        self::assertContains("O'Reilly", array_column($encryptBinder->bindings(), 'value'));
+        self::assertContains(
+            'cipher-algo=aes256,compress-algo=0',
+            array_column($encryptBinder->bindings(), 'value'),
+        );
+
+        $decryptBinder = new ValueBinder();
+        $decryptSql = $behavior->decryptField('Temps.name')->sql($decryptBinder);
+        self::assertStringContainsString('pgp_sym_decrypt', $decryptSql);
+        self::assertStringNotContainsString('CONVERT', $decryptSql);
+        self::assertContains(
+            Configure::read('CakeAes.key'),
+            array_column($decryptBinder->bindings(), 'value'),
+        );
+    }
+
+    public function testPostgresRequiresPgcrypto(): void
+    {
+        Configure::write('CakeAes.key', 'postgres-passphrase');
+        $dialect = EncryptionDialectFactory::create($this->postgresConnection(false));
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('pgcrypto');
+        $dialect->encrypt('value');
+    }
+
+    public function testExplicitDriverMustMatchConnection(): void
+    {
+        Configure::write('CakeAes.driver', 'postgres');
+
+        $this->expectException(RuntimeException::class);
+        EncryptionDialectFactory::create($this->connection());
     }
 }

@@ -14,8 +14,8 @@ use Cake\Event\EventInterface;
 use Cake\ORM\Behavior;
 use Cake\ORM\Query\SelectQuery;
 use Cake\Database\Expression\OrderClauseExpression;
-use CakeAes\Model\Database\Expression\DecryptedExpression;
-use CakeAes\Model\Database\EncryptionProfile;
+use CakeAes\Model\Database\Dialect\DatabaseEncryptionDialect;
+use CakeAes\Model\Database\Dialect\EncryptionDialectFactory;
 use Cake\Utility\Security;
 use Cake\Database\TypeFactory;
 use Cake\ORM\Locator\LocatorAwareTrait;
@@ -25,6 +25,8 @@ use Cake\ORM\Locator\LocatorAwareTrait;
 class EncryptBehavior extends Behavior
 {
     use LocatorAwareTrait;
+
+    private ?DatabaseEncryptionDialect $encryptionDialect = null;
 
     public function initialize(array $config): void
     {
@@ -70,11 +72,7 @@ class EncryptBehavior extends Behavior
      */
     public function encrypt(string $value): QueryExpression
     {
-        $key = EncryptionProfile::key($this->_table->getConnection());
-        $unhex = new FunctionExpression('UNHEX', [$key], ['string']);
-        return new QueryExpression([
-            new FunctionExpression('AES_ENCRYPT', [$value, $unhex], ['string']),
-        ]);
+        return $this->dialect()->encrypt($value);
     }
 
     public function beforeFind(EventInterface $event, SelectQuery $query, ArrayObject $options, bool $primary): void
@@ -313,13 +311,7 @@ class EncryptBehavior extends Behavior
         ) {
             throw new \InvalidArgumentException('Expected a configured encrypted field or association field.');
         }
-        $key = EncryptionProfile::key($this->_table->getConnection());
-        return new DecryptedExpression([
-            new FunctionExpression('AES_DECRYPT', [
-                new IdentifierExpression($fieldName),
-                new FunctionExpression('UNHEX', [$key], ['string']),
-            ]),
-        ]);
+        return $this->dialect()->decrypt($fieldName);
     }
 
     /**
@@ -395,5 +387,14 @@ class EncryptBehavior extends Behavior
 
             return $part;
         });
+    }
+
+    private function dialect(): DatabaseEncryptionDialect
+    {
+        if ($this->encryptionDialect === null) {
+            $this->encryptionDialect = EncryptionDialectFactory::create($this->_table->getConnection());
+        }
+
+        return $this->encryptionDialect;
     }
 }

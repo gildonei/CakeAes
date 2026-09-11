@@ -1,5 +1,5 @@
 # CakeAes
-CakePHP plugin to encrypt/decrypt table fields using database AES functions on MySQL/MariaDB databases.
+CakePHP plugin to encrypt/decrypt table fields using MySQL/MariaDB AES functions or PostgreSQL pgcrypto.
 This branch is for use with CakePHP 5.0+. Use branch "main-cake4" to use with CakePHP 4.0+
 
 ## Install
@@ -19,11 +19,24 @@ Configure a new security hash in *app_local.php*:
 'Security' => [
     'key' => '<your application-specific hexadecimal key>',
 ],
+'CakeAes' => [
+    'driver' => 'auto',
+    'key' => env('CAKE_AES_KEY'),
+    'mysql' => [
+        'profile' => 'legacy',
+        'expectedMode' => 'aes-128-ecb',
+    ],
+    'postgres' => [
+        'cipher' => 'aes256',
+        'compress-algo' => 0,
+    ],
+],
 ```
-- This will be the key used by the plugin for encryption.
+- `CakeAes.key` is preferred. `Security.key` remains as a compatibility fallback.
+- `driver` should normally stay `auto`; `mysql` and `postgres` are accepted as explicit checks.
 - NEVER use the same key for different apps.
 - Once generated, NEVER change the key.
-- The key must contain at least 32 digits in hexadecimal.
+- MySQL keys must contain at least 32 hexadecimal characters. PostgreSQL passphrases must contain at least 16 characters.
 
 Change the type field of the fields you want to encrypt on your tables to a binary type:
 ```
@@ -31,7 +44,8 @@ char(20) -> blob
 vachar(200) -> varbinary(200)
 text -> blob
 ```
-- Only *string* types works. Use only *VarBinary* or *Blob* types.
+- PostgreSQL fields must use `bytea` instead.
+- Only string values are encrypted.
 
 Load the behavior on your table *initialize()* method:
 ```
@@ -126,7 +140,7 @@ return $this->Encrypt->decryptDownload($imageFile);
 This release requires CakePHP 5 and PHP 8.1 or newer. Existing ciphertext is
 not migrated, and the plugin never changes the database encryption mode.
 
-Configure `CakeAes` alongside `Security` in `app_local.php`:
+For the legacy flat configuration, configure `CakeAes` alongside `Security` in `app_local.php`:
 
 ```php
 'CakeAes' => [
@@ -162,6 +176,23 @@ identify the original server version, key and mode; decrypt using that original
 configuration; write to separate columns using the target configuration; compare
 all recovered values before switching reads. Account for ciphertext byte length
 when sizing binary columns. No automatic migration is performed by this release.
+
+### PostgreSQL with pgcrypto
+
+Enable pgcrypto in the application database using a database administrator:
+
+```sql
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+```
+
+The PostgreSQL dialect stores OpenPGP ciphertext in `bytea` using
+`pgp_sym_encrypt()` and reads it using `pgp_sym_decrypt()`. The default options
+are `cipher-algo=aes256,compress-algo=0`. Allowed ciphers are `aes128`, `aes192`
+and `aes256`; compression values are `0`, `1` and `2`.
+
+MySQL ciphertext and PostgreSQL pgcrypto ciphertext are different formats. Moving
+between databases requires decrypting with the source dialect and encrypting with
+the destination dialect. Copying encrypted bytes directly will not work.
 
 ### Query API migration
 
