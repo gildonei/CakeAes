@@ -12,7 +12,10 @@ use Cake\Database\Expression\ComparisonExpression;
 use Cake\Datasource\EntityInterface;
 use Cake\Event\EventInterface;
 use Cake\ORM\Behavior;
-use Cake\ORM\Query;
+use Cake\ORM\Query\SelectQuery;
+use Cake\Database\Expression\OrderClauseExpression;
+use CakeAes\Model\Database\Expression\DecryptedExpression;
+use CakeAes\Model\Database\EncryptionProfile;
 use Cake\Utility\Security;
 use Cake\Database\TypeFactory;
 use Cake\ORM\Locator\LocatorAwareTrait;
@@ -67,17 +70,14 @@ class EncryptBehavior extends Behavior
      */
     public function encrypt(string $value): QueryExpression
     {
-        /** @var string $key */
-        $key = Configure::read('Security.key');
-        $query = $this->_table->find();
-        $value = addslashes($value);
-        $expressionValue = $query->expr()
-            ->add("AES_ENCRYPT('{$value}',UNHEX('{$key}'))");
+        $key = EncryptionProfile::key($this->_table->getConnection());
+        $unhex = new FunctionExpression('UNHEX', [$key], ['string']);
+        return new QueryExpression([
+            new FunctionExpression('AES_ENCRYPT', [$value, $unhex], ['string']),
+        ]);
+    }
 
-        return $expressionValue;
-	}
-
-    public function beforeFind(EventInterface $event, Query $query, ArrayObject $options, bool $primary): void
+    public function beforeFind(EventInterface $event, SelectQuery $query, ArrayObject $options, bool $primary): void
     {
         $associations = $query->getContain();
         $this->setContainFields($query, $associations);
@@ -86,7 +86,7 @@ class EncryptBehavior extends Behavior
         $query = $this->decryptOrder($query);
     }
 
-    protected function setContainFields(Query $query, array $associations): void
+    protected function setContainFields(SelectQuery $query, array $associations): void
     {
         foreach ($associations as $name => $config) {
             foreach ($config as $key => $options) {
@@ -110,11 +110,11 @@ class EncryptBehavior extends Behavior
     /**
      * Decrypt select encrypted fields
      *
-     * @param Query $query Query
+     * @param SelectQuery $query SelectQuery
      * @param bool $primary Is a primary table or associated table
-     * @return Query Modified Query with decrypt expressions in found fields
+     * @return SelectQuery Modified Query with decrypt expressions in found fields
      */
-    public function decryptSelect(Query $query, $primary): Query
+    public function decryptSelect(SelectQuery $query, $primary): SelectQuery
     {
         $select = $query->clause('select');
         if (empty($select)) {
@@ -154,10 +154,10 @@ class EncryptBehavior extends Behavior
     /**
      * Decrypt where encrypted fields
      *
-     * @param Query $query Query
-     * @return Query Modified Query with decrypt expressions in found fields
+     * @param SelectQuery $query SelectQuery
+     * @return SelectQuery Modified Query with decrypt expressions in found fields
      */
-    public function decryptWhere(Query $query): Query
+    public function decryptWhere(SelectQuery $query): SelectQuery
     {
         $expr = $query->clause('where');
         if ($expr instanceof QueryExpression) {
@@ -179,20 +179,34 @@ class EncryptBehavior extends Behavior
     /**
      * Decrypt order by encrypted fields
      *
-     * @param Query $query Query
-     * @return Query Modified Query with decrypt expressions in found fields
+     * @param SelectQuery $query SelectQuery
+     * @return SelectQuery Modified Query with decrypt expressions in found fields
      */
-    public function decryptOrder(Query $query): Query
+    public function decryptOrder(SelectQuery $query): SelectQuery
     {
         $expr = $query->clause('order');
         if ($expr instanceof \Cake\Database\Expression\OrderByExpression) {
-            $expr->iterateParts(function ($direction, &$field) {
-                if ($this->isEncrypted($field)) {
-                    $field = $this->decryptString($field);
+            $parts = [];
+            $expr->iterateParts(function ($direction, $field) use (&$parts) {
+                if (is_string($field) && $this->isEncrypted($field)) {
+                    $expression = new OrderClauseExpression($this->decryptField($field), $direction);
+                    $parts[] = $expression;
+                    return $direction;
                 }
-
+                if ($direction instanceof OrderClauseExpression) {
+                    $name = $direction->getField();
+                    if (is_string($name) && $this->isEncrypted($name)) {
+                        $direction->setField($this->decryptField($name));
+                    }
+                }
+                if (is_int($field)) {
+                    $parts[] = $direction;
+                } else {
+                    $parts[$field] = $direction;
+                }
                 return $direction;
             });
+            $query->orderBy($parts, true);
         }
 
         return $query;
@@ -293,26 +307,27 @@ class EncryptBehavior extends Behavior
      */
     public function decryptField($fieldName): QueryExpression
     {
-        $expressionField = $this->_table->find()
-            ->expr()
-            ->add($this->decryptString($fieldName));
-
-        return $expressionField;
+        if (!is_string($fieldName) ||
+            !preg_match('/^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?$/D', $fieldName) ||
+            !$this->isEncrypted($fieldName)
+        ) {
+            throw new \InvalidArgumentException('Expected a configured encrypted field or association field.');
+        }
+        $key = EncryptionProfile::key($this->_table->getConnection());
+        return new DecryptedExpression([
+            new FunctionExpression('AES_DECRYPT', [
+                new IdentifierExpression($fieldName),
+                new FunctionExpression('UNHEX', [$key], ['string']),
+            ]),
+        ]);
     }
 
     /**
-     * Decrypt field string
-     *
-     * @param string $fieldName Field name
-     * @return string Decrypt field string
+     * @deprecated Use decryptField(). A SQL string cannot retain bound parameters.
      */
     public function decryptString(string $fieldName): string
     {
-        /** @var string $key */
-        $key = Configure::read('Security.key');
-        $expression = "(CONVERT(AES_DECRYPT({$fieldName}, UNHEX('{$key}')) USING utf8mb4) COLLATE utf8mb4_unicode_ci)";
-
-        return $expression;
+        throw new \LogicException('decryptString() is no longer supported; use decryptField() as an expression.');
     }
 
     /**
@@ -373,9 +388,9 @@ class EncryptBehavior extends Behavior
     {
         $field->iterateParts(function ($part) {
             if ($part instanceof IdentifierExpression && $this->isEncrypted($part->getIdentifier())) {
-                $part->setIdentifier($this->decryptString($part->getIdentifier()));
+                $part = $this->decryptField($part->getIdentifier());
             } else if (is_string($part) && $this->isEncrypted($part)) {
-                $part = $this->decryptString($part);
+                $part = $this->decryptField($part);
             }
 
             return $part;

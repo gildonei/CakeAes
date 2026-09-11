@@ -28,7 +28,17 @@ class AesType extends BinaryType
             return null;
         }
         if (is_string($value) || is_numeric($value) || is_resource($value)) {
-            return stripslashes((string)$value);
+            if (is_resource($value)) {
+                if (get_resource_type($value) !== 'stream') {
+                    throw new Exception('Expected a stream resource.');
+                }
+                $content = stream_get_contents($value);
+                if ($content === false) {
+                    throw new Exception('Unable to read binary stream.');
+                }
+                return $content;
+            }
+            return (string)$value;
         }
         throw new Exception(sprintf('Unable to convert %s into binary.', gettype($value)));
     }
