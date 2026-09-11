@@ -19,6 +19,7 @@ use CakeAes\Model\Database\Dialect\EncryptionDialectFactory;
 use Cake\Utility\Security;
 use Cake\Database\TypeFactory;
 use Cake\ORM\Locator\LocatorAwareTrait;
+use WeakMap;
 /**
  * Encrypt Behavior
  */
@@ -28,13 +29,20 @@ class EncryptBehavior extends Behavior
 
     private ?DatabaseEncryptionDialect $encryptionDialect = null;
 
+    /** @var list<string> */
+    private array $encryptFields = [];
+
+    /** @var WeakMap<EntityInterface, array<string, string>> */
+    private WeakMap $decryptedValues;
+
+    /** @var array<int|string, mixed>|null */
+    private ?array $containEncryptedFields = null;
+
     public function initialize(array $config): void
     {
-        $this->_table->encryptFields = [];
-        $this->_table->decryptedValues = [];
-        $this->_table->containEncryptedFields = null;
+        $this->decryptedValues = new WeakMap();
         if (isset($config['fields']) && is_array($config['fields'])) {
-            $this->_table->encryptFields = $config['fields'];
+            $this->encryptFields = array_values($config['fields']);
             TypeFactory::map('aes', 'CakeAes\Model\Database\Type\AesType');
             $schema = $this->_table->getSchema();
             foreach ($config['fields'] as $field) {
@@ -47,21 +55,25 @@ class EncryptBehavior extends Behavior
 
     public function beforeSave(EventInterface $event, EntityInterface $entity, ArrayObject $options): void
     {
-        foreach ($this->_table->encryptFields as $field) {
+        $decryptedValues = [];
+        foreach ($this->encryptFields as $field) {
             $value = $entity->get($field);
             if (is_string($value)) {
-                $this->_table->decryptedValues[$field] = $value;
+                $decryptedValues[$field] = $value;
                 $entity->set($field, $this->encrypt($value));
             }
+        }
+        if ($decryptedValues !== []) {
+            $this->decryptedValues[$entity] = $decryptedValues;
         }
     }
 
     public function afterSave(EventInterface $event, EntityInterface $entity, ArrayObject $options): void
     {
-        foreach ($this->_table->decryptedValues as $field => $value) {
+        foreach ($this->decryptedValues[$entity] ?? [] as $field => $value) {
             $entity->set($field, $value);
         }
-        $this->_table->decryptedValues = [];
+        unset($this->decryptedValues[$entity]);
     }
 
     /**
@@ -94,7 +106,10 @@ class EncryptBehavior extends Behavior
                     $table = $locator->allowFallbackClass(true)
                         ->get($name);
                     if ($table->hasBehavior('Encrypt')) {
-                        $table->containEncryptedFields = $options;
+                        $behavior = $table->getBehavior('Encrypt');
+                        if ($behavior instanceof self) {
+                            $behavior->setContainEncryptedFields($options);
+                        }
                     }
                 } else {
                     if (is_array($options)) {
@@ -115,14 +130,14 @@ class EncryptBehavior extends Behavior
     public function decryptSelect(SelectQuery $query, $primary): SelectQuery
     {
         $select = $query->clause('select');
+        $containEncryptedFields = $this->consumeContainEncryptedFields();
         if (empty($select)) {
-            if ($primary || $this->_table->containEncryptedFields === null) {
+            if ($primary || $containEncryptedFields === null) {
                 $select = $this->_table
                     ->getSchema()
                     ->columns();
             } else {
-                $select = $this->_table->containEncryptedFields;
-                $this->_table->containEncryptedFields = [];
+                $select = $containEncryptedFields;
             }
         }
         $fields = [];
@@ -225,10 +240,17 @@ class EncryptBehavior extends Behavior
                 list($table, $field) = explode('.', $field);
             }
             if (empty($table) || $table == $this->_table->getAlias()) {
-                $isEncrypted = in_array($field, $this->_table->encryptFields);
+                $isEncrypted = in_array($field, $this->encryptFields, true);
             } else {
-                if (!empty($this->_table->{$table}) && $this->_table->{$table}->hasBehavior('Encrypt')) {
-                    $isEncrypted = $this->_table->{$table}->isEncrypted($field);
+                $association = $this->_table->associations()->get($table);
+                if ($association !== null) {
+                    $target = $association->getTarget();
+                    if ($target->hasBehavior('Encrypt')) {
+                        $behavior = $target->getBehavior('Encrypt');
+                        if ($behavior instanceof self) {
+                            $isEncrypted = $behavior->isEncrypted($field);
+                        }
+                    }
                 }
             }
         }
@@ -387,6 +409,24 @@ class EncryptBehavior extends Behavior
 
             return $part;
         });
+    }
+
+    /**
+     * @param array<int|string, mixed> $fields Fields selected by a containing query.
+     * @return void
+     */
+    public function setContainEncryptedFields(array $fields): void
+    {
+        $this->containEncryptedFields = $fields;
+    }
+
+    /** @return array<int|string, mixed>|null */
+    private function consumeContainEncryptedFields(): ?array
+    {
+        $fields = $this->containEncryptedFields;
+        $this->containEncryptedFields = null;
+
+        return $fields;
     }
 
     private function dialect(): DatabaseEncryptionDialect

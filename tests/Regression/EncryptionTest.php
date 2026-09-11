@@ -9,6 +9,8 @@ use Cake\Database\Driver\Postgres;
 use Cake\Database\StatementInterface;
 use Cake\Database\Schema\TableSchema;
 use Cake\Database\ValueBinder;
+use Cake\Event\EventInterface;
+use Cake\ORM\Entity;
 use Cake\ORM\Table;
 use CakeAes\Model\Behavior\EncryptBehavior;
 use CakeAes\Model\Database\Type\AesType;
@@ -176,5 +178,83 @@ final class EncryptionTest extends TestCase
 
         $this->expectException(RuntimeException::class);
         EncryptionDialectFactory::create($this->connection());
+    }
+
+    public function testBehaviorDoesNotCreateDynamicTableProperties(): void
+    {
+        set_error_handler(static function (int $severity, string $message): never {
+            throw new ErrorException($message, 0, $severity);
+        }, E_DEPRECATED);
+        try {
+            $table = new Table([
+                'alias' => 'Temps',
+                'table' => 'temps',
+                'connection' => $this->connection(),
+            ]);
+            $table->setSchema(new TableSchema('temps', ['name' => ['type' => 'binary']]));
+            new EncryptBehavior($table, ['fields' => ['name']]);
+        } finally {
+            restore_error_handler();
+        }
+
+        self::assertFalse(property_exists($table, 'encryptFields'));
+        self::assertFalse(property_exists($table, 'decryptedValues'));
+        self::assertFalse(property_exists($table, 'containEncryptedFields'));
+    }
+
+    public function testDecryptedValuesAreScopedByEntity(): void
+    {
+        $table = new Table([
+            'alias' => 'Temps',
+            'table' => 'temps',
+            'connection' => $this->connection(),
+        ]);
+        $table->setSchema(new TableSchema('temps', ['name' => ['type' => 'binary']]));
+        $behavior = new EncryptBehavior($table, ['fields' => ['name']]);
+        $first = new Entity(['name' => 'First']);
+        $second = new Entity(['name' => 'Second']);
+        $event = $this->createMock(EventInterface::class);
+        $options = new ArrayObject();
+
+        $behavior->beforeSave($event, $first, $options);
+        $behavior->beforeSave($event, $second, $options);
+        self::assertNotSame('First', $first->get('name'));
+        self::assertNotSame('Second', $second->get('name'));
+
+        $behavior->afterSave($event, $first, $options);
+        self::assertSame('First', $first->get('name'));
+        self::assertNotSame('Second', $second->get('name'));
+
+        $behavior->afterSave($event, $second, $options);
+        self::assertSame('Second', $second->get('name'));
+    }
+
+    public function testAssociationAndContainStateUseBehaviors(): void
+    {
+        $connection = $this->connection();
+        $parents = new Table(['alias' => 'Parents', 'table' => 'parents', 'connection' => $connection]);
+        $children = new Table(['alias' => 'Children', 'table' => 'children', 'connection' => $connection]);
+        $parents->setSchema(new TableSchema('parents', ['id' => ['type' => 'integer']]));
+        $children->setSchema(new TableSchema('children', [
+            'id' => ['type' => 'integer'],
+            'name' => ['type' => 'binary'],
+        ]));
+        $parents->addBehavior('CakeAes.Encrypt', ['fields' => []]);
+        $children->addBehavior('CakeAes.Encrypt', ['fields' => ['name']]);
+        $parents->hasMany('Children', ['targetTable' => $children]);
+
+        $parentBehavior = $parents->getBehavior('Encrypt');
+        $childBehavior = $children->getBehavior('Encrypt');
+        self::assertInstanceOf(EncryptBehavior::class, $parentBehavior);
+        self::assertInstanceOf(EncryptBehavior::class, $childBehavior);
+        self::assertTrue($parentBehavior->isEncrypted('Children.name'));
+
+        $childBehavior->setContainEncryptedFields(['display_name' => 'name']);
+        $contained = $childBehavior->decryptSelect($children->find(), false)->clause('select');
+        self::assertCount(1, $contained);
+        self::assertArrayHasKey('display_name', $contained);
+
+        $nextQuery = $childBehavior->decryptSelect($children->find(), false)->clause('select');
+        self::assertCount(2, $nextQuery);
     }
 }
